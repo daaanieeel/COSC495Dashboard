@@ -3,10 +3,33 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import json
+import os
 from sklearn.linear_model import LinearRegression
 from itertools import combinations
 
-st.set_page_config(page_title="Litter Survey Dashboard", layout="wide")
+SETTINGS_FILE = "exclusion_settings.json"
+DEFAULT_EXCLUDES = [
+    'livability','head_placed','farm_no','house_no', 
+    'goal_weight','mortality_rate','age_days',
+    'hen_age_weeks','production_days','feed_efficiency'
+]
+
+def load_permanent_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return DEFAULT_EXCLUDES
+    return DEFAULT_EXCLUDES
+
+def save_permanent_settings(exclusions):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(exclusions, f)
+
+if 'excluded_vars' not in st.session_state:
+    st.session_state.excluded_vars = load_permanent_settings()
 
 if 'top_2d_global' not in st.session_state:
     st.session_state.top_2d_global = None
@@ -15,13 +38,27 @@ if 'top_3d_global' not in st.session_state:
 if 'target_results' not in st.session_state:
     st.session_state.target_results = None
 
+st.set_page_config(page_title="Litter Survey Dashboard", layout="wide")
 st.title("Litter Survey Dashboard")
 
-EXCLUDE_LIST = ['livability','head_placed','farm_no','house_no', 'goal_weight']
-
 try:
-    df_raw = pd.read_csv('data/processed/Final_Cleaned_Litter_Survey.csv')
-    df_filtered = df_raw.drop(columns=EXCLUDE_LIST, errors='ignore')
+    df_raw = pd.read_csv('../data/processed/Final_Cleaned_Litter_Survey.csv')
+    all_cols = df_raw.columns.tolist()
+
+    st.sidebar.header("Variable Exclusions")
+    
+    chosen_excludes = st.sidebar.multiselect(
+        "Select variables to ignore:",
+        options=all_cols,
+        default=st.session_state.excluded_vars
+    )
+
+    if chosen_excludes != st.session_state.excluded_vars:
+        st.session_state.excluded_vars = chosen_excludes
+        save_permanent_settings(chosen_excludes)
+        st.rerun()
+
+    df_filtered = df_raw.drop(columns=st.session_state.excluded_vars, errors='ignore')
 
     df_numeric_only = df_filtered.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all').dropna()
     df_numeric_only = df_numeric_only.astype(np.float64)
@@ -39,41 +76,49 @@ try:
 
     st.sidebar.markdown("---")
     st.sidebar.header("Target-Specific Discovery")
-    target_var = st.sidebar.selectbox("Pick a Target Variable", numeric_cols)
+    
+    if numeric_cols:
+        target_var = st.sidebar.selectbox("Pick a Target Variable", numeric_cols)
+        positive = st.sidebar.checkbox("Positive Correlation", True)
+        negative = st.sidebar.checkbox("Negative Correlation", True)
+        size_head = st.sidebar.number_input("# of Columns to Display: ", 1, 50, 5)
 
-    if st.sidebar.button(f"Analyze for {target_var}"):
-        r_list = []
-        for col in numeric_cols:
-            if col != target_var:
-                r = df_numeric_only[target_var].corr(df_numeric_only[col])
-                r_list.append({'Variable': col, 'r': round(r, 3), 'abs_r': abs(r)})
-        
-        trio_list = []
-        others = [c for c in numeric_cols if c != target_var]
-        for p1, p2 in combinations(others, 2):
-            X = df_numeric_only[[p1, p2]].values
-            y = df_numeric_only[target_var].values
-            score = LinearRegression().fit(X, y).score(X, y)
-            trio_list.append({'Predictors': f"{p1} + {p2}", 'R²': round(score, 3)})
-        
-        st.session_state.target_results = {
-            'name': target_var,
-            '2d': pd.DataFrame(r_list).sort_values(by='abs_r', ascending=False).head(5),
-            '3d': pd.DataFrame(trio_list).sort_values(by='R²', ascending=False).head(5)
-        }
+        if st.sidebar.button(f"Analyze for {target_var}"):
+            r_list = []
+            for col in numeric_cols:
+                if col != target_var:
+                    r = df_numeric_only[target_var].corr(df_numeric_only[col])
+                    if (positive and r >= 0) or (negative and r <= 0):
+                        r_list.append({'Variable': col, 'r': round(r, 3), 'abs_r': abs(r)})
+            
+            trio_list = []
+            others = [c for c in numeric_cols if c != target_var]
+            for p1, p2 in combinations(others, 2):
+                X = df_numeric_only[[p1, p2]].values
+                y = df_numeric_only[target_var].values
+                score = LinearRegression().fit(X, y).score(X, y)
+                trio_list.append({'Predictors': f"{p1} + {p2}", 'R²': round(score, 3)})
+            
+            st.session_state.target_results = {
+                'name': target_var,
+                '2d': pd.DataFrame(r_list).sort_values(by='abs_r', ascending=False).head(size_head),
+                '3d': pd.DataFrame(trio_list).sort_values(by='R²', ascending=False).head(size_head)
+            }
 
-    if st.session_state.target_results:
-        res = st.session_state.target_results
-        st.sidebar.info(f"Results for: {res['name']}")
-        st.sidebar.write("**Top 2D Partners (R)**")
-        st.sidebar.table(res['2d'][['Variable', 'r']])
-        st.sidebar.write("**Top 3D Pairings (R²)**")
-        st.sidebar.table(res['3d'])
-
+        if st.session_state.target_results:
+            res = st.session_state.target_results
+            st.sidebar.info(f"Results for: {res['name']}")
+            st.sidebar.write("**Top 2D Partners (R)**")
+            st.sidebar.table(res['2d'][['Variable', 'r']])
+            st.sidebar.write("**Top 3D Pairings (R²)**")
+            st.sidebar.table(res['3d'])
+    
     st.sidebar.markdown("---")
 
     st.sidebar.header("Global Discovery")
-    
+    globalpositive = st.sidebar.checkbox("Positive Correlation", True, key="GlobalPos")
+    globalnegative = st.sidebar.checkbox("Negative Correlation", True, key="GlobalNeg")
+    globalhead = st.sidebar.number_input("# of Columns to Display: ", 1, 50, 5, key="GlobalHead")
     if mode == "2 Variables (Correlation)":
         if st.sidebar.button("Find Top 10 2D Links"):
             pairs = list(combinations(numeric_cols, 2))
@@ -81,7 +126,8 @@ try:
             for p1, p2 in pairs:
                 r = df_numeric_only[p1].corr(df_numeric_only[p2])
                 if not np.isnan(r):
-                    results.append({'A': p1, 'B': p2, 'r': round(r, 3), 'abs_r': abs(r)})
+                    if (globalpositive and r >= 0) or (globalnegative and r <= 0):
+                        results.append({'A': p1, 'B': p2, 'r': round(r, 3), 'abs_r': abs(r)})
             st.session_state.top_2d_global = pd.DataFrame(results).sort_values(by='abs_r', ascending=False).head(10)
 
     elif mode == "3 Variables (3D Plane)":
