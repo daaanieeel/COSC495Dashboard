@@ -118,7 +118,7 @@ try:
     st.sidebar.header("Global Discovery")
     globalpositive = st.sidebar.checkbox("Positive Correlation", True, key="GlobalPos")
     globalnegative = st.sidebar.checkbox("Negative Correlation", True, key="GlobalNeg")
-    globalhead = st.sidebar.number_input("# of Columns to Display: ", 1, 50, 5, key="GlobalHead")
+    globalhead = st.sidebar.number_input("# of Columns to Display: ", 1, 50, 10, key="GlobalHead")
     if mode == "2 Variables (Correlation)":
         if st.sidebar.button("Find Top 10 2D Links"):
             pairs = list(combinations(numeric_cols, 2))
@@ -128,7 +128,7 @@ try:
                 if not np.isnan(r):
                     if (globalpositive and r >= 0) or (globalnegative and r <= 0):
                         results.append({'A': p1, 'B': p2, 'r': round(r, 3), 'abs_r': abs(r)})
-            st.session_state.top_2d_global = pd.DataFrame(results).sort_values(by='abs_r', ascending=False).head(10)
+            st.session_state.top_2d_global = pd.DataFrame(results).sort_values(by='abs_r', ascending=False).head(globalhead)
 
     elif mode == "3 Variables (3D Plane)":
         if st.sidebar.button("Find Top 10 3D Models"):
