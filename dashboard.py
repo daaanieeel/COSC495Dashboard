@@ -65,12 +65,13 @@ try:
     numeric_cols = df_numeric_only.columns.tolist()
 
     auto_cat_cols = [col for col in df_filtered.select_dtypes(include=['object', 'category']).columns 
-                    if df_filtered[col].nunique() < 15]
+                    if df_filtered[col].nunique() < 25]
 
     mode = st.sidebar.selectbox("Analysis Mode", [
         "1 Variable (Distribution)", 
         "2 Variables (Correlation)", 
         "3 Variables (3D Plane)",
+        "Correlation Matrix",
         "Categorical Analysis (Bar Charts)"
     ])
 
@@ -119,6 +120,7 @@ try:
     globalpositive = st.sidebar.checkbox("Positive Correlation", True, key="GlobalPos")
     globalnegative = st.sidebar.checkbox("Negative Correlation", True, key="GlobalNeg")
     globalhead = st.sidebar.number_input("# of Columns to Display: ", 1, 50, 10, key="GlobalHead")
+    
     if mode == "2 Variables (Correlation)":
         if st.sidebar.button("Find Top 10 2D Links"):
             pairs = list(combinations(numeric_cols, 2))
@@ -176,13 +178,40 @@ try:
             fig.update_layout(scene=dict(xaxis_title=xv, yaxis_title=yv, zaxis_title=zv), margin=dict(l=0,r=0,b=0,t=0))
             st.plotly_chart(fig, use_container_width=True)
 
+    elif mode == "Correlation Matrix":
+        st.subheader("Predictor Correlation Heatmap")
+        corr_matrix = df_numeric_only.corr()
+        
+        fig = px.imshow(
+            corr_matrix,
+            text_auto='.2f',
+            color_continuous_scale='RdBu_r',
+            aspect="auto",
+            zmin=-1, zmax=1
+        )
+        st.plotly_chart(fig, use_container_width=True)
     elif mode == "Categorical Analysis (Bar Charts)":
         if auto_cat_cols:
             c1, c2 = st.columns(2)
             cat_v = c1.selectbox("Survey Category", auto_cat_cols)
             num_v = c2.selectbox("Numeric Metric", numeric_cols)
-            df_grp = df_filtered.groupby(cat_v)[num_v].mean().reset_index().sort_values(num_v, ascending=False)
-            st.plotly_chart(px.bar(df_grp, x=cat_v, y=num_v, color=num_v, text_auto='.2f'), use_container_width=True)
+            
+            df_exploded = df_filtered.copy().dropna(subset=[cat_v])
+            
+            df_exploded[cat_v] = df_exploded[cat_v].astype(str).str.split(r',\s*')
+            df_exploded = df_exploded.explode(cat_v)
+            
+            df_exploded[cat_v] = df_exploded[cat_v].str.strip()
+            
+            df_exploded = df_exploded[~df_exploded[cat_v].isin(['nan', 'NaN', ''])]
+
+            df_grp = df_exploded.groupby(cat_v)[num_v].mean().reset_index().sort_values(num_v, ascending=False)
+            
+            if not df_grp.empty:
+                fig_bar = px.bar(df_grp, x=cat_v, y=num_v, color=num_v, text_auto='.2f')
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.warning("No valid survey responses found for this category.")
 
 except Exception as e:
     st.error(f"Dashboard Error: {e}")
