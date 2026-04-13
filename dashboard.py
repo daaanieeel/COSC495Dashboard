@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import numpy as np
 import json
 import os
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression # Added Logistic
 from itertools import combinations
 
 SETTINGS_FILE = "exclusion_settings.json"
@@ -72,7 +72,8 @@ try:
         "2 Variables (Correlation)", 
         "3 Variables (3D Plane)",
         "Correlation Matrix",
-        "Categorical Analysis (Bar Charts)"
+        "Categorical Analysis (Bar Charts)",
+        "Logistic Regression (Binary Class)"
     ])
 
     st.sidebar.markdown("---")
@@ -179,17 +180,51 @@ try:
             st.plotly_chart(fig, use_container_width=True)
 
     elif mode == "Correlation Matrix":
-        st.subheader("Predictor Correlation Heatmap")
-        corr_matrix = df_numeric_only.corr()
+        st.subheader("Logistic Regression Accuracy Matrix")
+        st.markdown("This matrix shows the **Accuracy** of predicting if the 'Row' variable is **High** (above median) using the 'Column' variable as a predictor.")
         
-        fig = px.imshow(
-            corr_matrix,
-            text_auto='.2f',
-            color_continuous_scale='RdBu_r',
-            aspect="auto",
-            zmin=-1, zmax=1
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        subset_cols = st.multiselect("Select variables for matrix:", numeric_cols, default=numeric_cols[:15])
+        
+        if len(subset_cols) > 1:
+            acc_matrix = pd.DataFrame(index=subset_cols, columns=subset_cols)
+
+            progress_bar = st.progress(0)
+            total_steps = len(subset_cols)
+            
+            for i, target in enumerate(subset_cols):
+                y_median = df_numeric_only[target].median()
+                y_bin = (df_numeric_only[target] > y_median).astype(int)
+                
+                for predictor in subset_cols:
+                    if target == predictor:
+                        acc_matrix.loc[target, predictor] = 1.0
+                    else:
+                        try:
+                            X = df_numeric_only[[predictor]].values
+                            model = LogisticRegression().fit(X, y_bin)
+                            acc_matrix.loc[target, predictor] = model.score(X, y_bin)
+                        except ValueError:
+                            acc_matrix.loc[target, predictor] = np.nan
+                
+                progress_bar.progress((i + 1) / total_steps)
+            
+            progress_bar.empty()
+            
+            acc_matrix = acc_matrix.astype(float)
+
+            fig = px.imshow(
+                acc_matrix,
+                text_auto='.2f',
+                color_continuous_scale='YlGnBu',
+                aspect="auto",
+                labels=dict(color="Accuracy"),
+                zmin=0.5, zmax=1.0
+            )
+            
+            fig.update_layout(height=700)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Please select at least two variables.")
     elif mode == "Categorical Analysis (Bar Charts)":
         if auto_cat_cols:
             c1, c2 = st.columns(2)
@@ -212,6 +247,52 @@ try:
                 st.plotly_chart(fig_bar, use_container_width=True)
             else:
                 st.warning("No valid survey responses found for this category.")
+    elif mode == "Logistic Regression (Binary Class)":
+        st.header("2D Logistic Regression: Probability Curve")
+        
+        col1, col2 = st.columns(2)
+        target_bin = col1.selectbox("Target (to be binarized)", numeric_cols, index=0)
+        predictor = col2.selectbox("Predictor (X)", numeric_cols, index=1)
+
+        median_val = df_numeric_only[target_bin].median()
+        y_binary = (df_numeric_only[target_bin] > median_val).astype(int)
+        
+        X = df_numeric_only[[predictor]].values
+        
+        log_model = LogisticRegression().fit(X, y_binary)
+        
+        x_range = np.linspace(X.min(), X.max(), 300).reshape(-1, 1)
+        y_probs = log_model.predict_proba(x_range)[:, 1]
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=x_range.flatten(), 
+            y=y_probs, 
+            name="Probability Curve",
+            line=dict(color='#2E8B57', width=3)
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=df_numeric_only[predictor], 
+            y=y_binary, 
+            mode='markers', 
+            name="Observations",
+            marker=dict(color=y_binary, colorscale='Viridis', opacity=0.5)
+        ))
+
+        fig.update_layout(
+            title=f"Probability of High {target_bin} vs {predictor}",
+            xaxis_title=predictor,
+            yaxis_title=f"Probability of {target_bin} > {median_val:.2f}",
+            yaxis=dict(range=[-0.05, 1.05]),
+            template="plotly_white"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        acc = log_model.score(X, y_binary)
+        st.metric("Model Accuracy", f"{acc:.2%}")
 
 except Exception as e:
     st.error(f"Dashboard Error: {e}")
